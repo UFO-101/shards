@@ -12,7 +12,7 @@ import numpy as np
 import transformer_lens.utils as utils
 from transformer_lens.hook_points import HookPoint
 from jaxtyping import Float, Int
-from tqdm import tqdm
+from tqdm.auto import tqdm
 import wandb
 from typing import Optional, Tuple, Union
 import uuid
@@ -114,6 +114,8 @@ def batch_steer_with_vec(model, vecs, single_prompt, return_layer_16=False):
 last_tok_jac = jac[-1]
 U, S, V = torch.svd(last_tok_jac)
 jacobian_steering_vecs = V.T
+
+singular_steering_factor = 10
 # %%
 
 model.reset_hooks()
@@ -121,11 +123,11 @@ for prompt in prompts:
     formatted_prompt = get_formatted_ask(tokenizer, prompt)
     formatted_prompt_tokens = get_formatted_ask(tokenizer, prompt, tokenize=True)
 
-    # regular_text = model.generate(formatted_prompt, max_new_tokens=100, temperature=0)
+    regular_text = model.generate(formatted_prompt, max_new_tokens=100, temperature=0)
     print(regular_text)
     n_steering_vecs = 600
 
-    steering_vecs = 20 * jacobian_steering_vecs[:n_steering_vecs]
+    steering_vecs = singular_steering_factor * jacobian_steering_vecs[:n_steering_vecs]
     output = batch_steer_with_vec(model, steering_vecs, formatted_prompt_tokens)
     for i, text in enumerate(output):
         print(f"Steered text {i}")
@@ -143,11 +145,15 @@ sorted_melb_idxs = top_csim_idxs[sorted_singular_idxs]
 sorted_singular_vecs = jacobian_steering_vecs[sorted_singular_idxs]
 matching_melb_vecs = all_melb_vecs[sorted_melb_idxs]
 
+# %%
+matching_melb_vecs.shape
 #%%
 
 formatted_prompt_tokens = get_formatted_ask(tokenizer, prompt, tokenize=True)
-r1 = batch_steer_with_vec(model, sorted_singular_vecs[:100], formatted_prompt_tokens)
-r2 = batch_steer_with_vec(model, matching_melb_vecs[:100], formatted_prompt_tokens)
+matching_melb_vec_magnitudes = torch.norm(matching_melb_vecs, dim=-1)
+n = 100
+r1 = batch_steer_with_vec(model, sorted_singular_vecs[:n] * matching_melb_vec_magnitudes[:n, None], formatted_prompt_tokens)
+r2 = batch_steer_with_vec(model, matching_melb_vecs[:n], formatted_prompt_tokens)
 zipped = list(zip(r1, r2))
 for i, (a, b) in enumerate(zipped):
     print()
@@ -159,10 +165,9 @@ for i, (a, b) in enumerate(zipped):
 
 # make a matrix of their cosine similarities of AF-map deltas:
 # where f: layer 8 -> layer 16 is AF-map then AF-map delta is f(p + theta) - f(p) over the prompt it was trained on
-singular_steering_factor = 10
 
 formatted_prompt_tokens = get_formatted_ask(tokenizer, prompt, tokenize=True)
-layer_16_act = model(torch.tensor(formatted_prompt_tokens), stop_at_layer=17).mean(dim=1)
+layer_16_act = model(torch.tensor(formatted_prompt_tokens), stop_at_layer=17)
 singular_vecs_AF_map_deltas = (batch_steer_with_vec(model, singular_steering_factor*jacobian_steering_vecs, formatted_prompt_tokens, return_layer_16=True) - layer_16_act).mean(dim=1)
 
 melb_vecs_AF_map_deltas = (batch_steer_with_vec(model, all_melb_vecs, formatted_prompt_tokens, return_layer_16=True) - layer_16_act).mean(dim=1)
@@ -176,8 +181,10 @@ sorted_singular_idxs = torch.argsort(top_csims, descending=True)
 sorted_melb_idxs = top_csim_idxs[sorted_singular_idxs]
 sorted_singular_vecs = jacobian_steering_vecs[sorted_singular_idxs]
 matching_melb_vecs = all_melb_vecs[sorted_melb_idxs]
+matching_melb_vec_magnitudes = torch.norm(matching_melb_vecs, dim=-1)
 
-r1 = batch_steer_with_vec(model, singular_steering_factor * sorted_singular_vecs[:20], formatted_prompt_tokens)
+n = 20
+r1 = batch_steer_with_vec(model, sorted_singular_vecs[:20] * matching_melb_vec_magnitudes[:n, None], formatted_prompt_tokens)
 r2 = batch_steer_with_vec(model, matching_melb_vecs[:20], formatted_prompt_tokens)
 zipped = list(zip(r1, r2))
 for i, (a, b) in enumerate(zipped):
