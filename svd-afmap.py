@@ -118,10 +118,10 @@ for prompt in prompts:
 # compare cosine similarity between all melb vectors and the jacobian vectors
 all_melb_vecs = torch.load('all_melb_vectors.pt').to(device)
 print(jacobian_steering_vecs.shape, all_melb_vecs.shape)
-# make a matrix of their cosine similarities
+# %%
+# make a matrix of their cosine similarities of steering vectors
 with torch.no_grad():
     csim_matrix = torch.nn.functional.cosine_similarity(jacobian_steering_vecs[:, None, :], all_melb_vecs[None, :, :], dim=-1)
-# %%
 res = scipy.optimize.linear_sum_assignment(-csim_matrix.cpu().numpy())
 results = []
 for i, j in zip(*res):
@@ -137,3 +137,8 @@ for i, (a, b) in enumerate(zipped):
     print(f"Steered text for pair {i}")
     print(a)
     print(b)
+
+# %%
+
+# make a matrix of their cosine similarities of AF-map deltas:
+# where f: layer 8 -> layer 16 is AF-map then AF-map delta is f(p + theta) - f(p) over the prompt it was trained on
