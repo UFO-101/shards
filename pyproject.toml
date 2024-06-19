@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "shards"
+version = "0.1.0"
+description = ""
+authors = ["UFO-101 <josephmiller101@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+torch = "^2.3.1"
+transformer-lens = "^2.1.0"
+vscode-tqdm = "^4.66.2"
+ipykernel = "^6.29.4"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
