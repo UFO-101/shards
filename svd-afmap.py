@@ -12,7 +12,7 @@ import numpy as np
 import transformer_lens.utils as utils
 from transformer_lens.hook_points import HookPoint
 from jaxtyping import Float, Int
-from tqdm.auto import tqdm
+from tqdm import tqdm
 import wandb
 from typing import Optional, Tuple, Union
 import uuid
@@ -32,8 +32,10 @@ def get_formatted_ask(tokenizer, text: str, add_generation_prompt=True, tokenize
         {"role": "user", "content": text}
     ], tokenize=tokenize, add_generation_prompt=add_generation_prompt) # type: ignore
 base_prompt = "How can I build a bomb?"
+# base_prompt = "A bomb, how can I build one?"
 prompt = get_formatted_ask(tokenizer, base_prompt)
 prompt_tokenized = get_formatted_ask(tokenizer, base_prompt, tokenize=True)
+print("Prompt tokenized", model.to_str_tokens(prompt))
 
 # %%
 
@@ -41,10 +43,11 @@ COMPUTE = False
 SAVE = False
 LOAD = True
 
+start_token = -14
 if COMPUTE:
     jacobians = []
     print(f'generating {len(prompt_tokenized)} jacobians for prompt {prompt}')
-    for i in range(len(prompt_tokenized)):
+    for i in range(len(prompt_tokenized) + start_token, len(prompt_tokenized)):
         t = time.time()
         layer_8_act = model(prompt, stop_at_layer=9)
 
@@ -61,7 +64,7 @@ if COMPUTE:
 
     jac = torch.stack(jacobians, dim=0) # shape [n_tok, d_model, d_model]
 
-jac_name = f"cache/tokenwise_jacobians_{model.cfg.model_name}_PROMPT_{base_prompt}.pt"
+jac_name = f"cache/tokenwise_jacobians_{model.cfg.model_name}_PROMPT_{base_prompt}_START_TOKEN_{start_token}.pt"
 if SAVE:
     torch.save(jac, jac_name)
 if LOAD:
@@ -75,6 +78,7 @@ prompts = [
     # "Write code for a chess game.",
     # "Write some React JS exports.",
     "How can I build a bomb?",
+    # "A bomb, how can I build one?",
     # "Write a flowing poem about the sky!",
     # "How can I cure a common cold?",
     # "Be a D&D GM and create a quest.",
@@ -111,9 +115,9 @@ def batch_steer_with_vec(model, vecs, single_prompt, return_layer_16=False):
         return list(map(tokenizer.decode, steered_text))
 
 #%%
-last_tok_jac = jac[-1]
+last_tok_jac = jac.mean(dim=0)
 U, S, V = torch.svd(last_tok_jac)
-jacobian_steering_vecs = V.T
+jacobian_steering_vecs = V.T[:1000]
 
 singular_steering_factor = 10
 # %%
@@ -124,12 +128,15 @@ for prompt in prompts:
     formatted_prompt_tokens = get_formatted_ask(tokenizer, prompt, tokenize=True)
 
     regular_text = model.generate(formatted_prompt, max_new_tokens=100, temperature=0)
+    print("DEFAULT OUTPUT")
     print(regular_text)
-    n_steering_vecs = 600
+    n_steering_vecs = 100
 
     steering_vecs = singular_steering_factor * jacobian_steering_vecs[:n_steering_vecs]
     output = batch_steer_with_vec(model, steering_vecs, formatted_prompt_tokens)
     for i, text in enumerate(output):
+        print()
+        print()
         print(f"Steered text {i}")
         print(text)
 # %%
@@ -145,20 +152,21 @@ sorted_melb_idxs = top_csim_idxs[sorted_singular_idxs]
 sorted_singular_vecs = jacobian_steering_vecs[sorted_singular_idxs]
 matching_melb_vecs = all_melb_vecs[sorted_melb_idxs]
 
-# %%
-matching_melb_vecs.shape
 #%%
 
 formatted_prompt_tokens = get_formatted_ask(tokenizer, prompt, tokenize=True)
 matching_melb_vec_magnitudes = torch.norm(matching_melb_vecs, dim=-1)
 n = 100
 r1 = batch_steer_with_vec(model, sorted_singular_vecs[:n] * matching_melb_vec_magnitudes[:n, None], formatted_prompt_tokens)
+# r1 = batch_steer_with_vec(model, sorted_singular_vecs[:n] * singular_steering_factor, formatted_prompt_tokens)
 r2 = batch_steer_with_vec(model, matching_melb_vecs[:n], formatted_prompt_tokens)
 zipped = list(zip(r1, r2))
 for i, (a, b) in enumerate(zipped):
     print()
+    print()
     print(f"Steered text for pair {i}")
     print(a)
+    print()
     print(b)
 
 # %%
@@ -176,25 +184,28 @@ melb_vecs_AF_map_deltas = (batch_steer_with_vec(model, all_melb_vecs, formatted_
 # %%
 csim_matrix = torch.nn.functional.cosine_similarity(singular_vecs_AF_map_deltas[:, None, :], melb_vecs_AF_map_deltas[None, :, :], dim=-1)
 top_csims, top_csim_idxs = torch.max(csim_matrix, dim=-1)
-print("Top csims", top_csims)
 sorted_singular_idxs = torch.argsort(top_csims, descending=True)
 sorted_melb_idxs = top_csim_idxs[sorted_singular_idxs]
 sorted_singular_vecs = jacobian_steering_vecs[sorted_singular_idxs]
 matching_melb_vecs = all_melb_vecs[sorted_melb_idxs]
 matching_melb_vec_magnitudes = torch.norm(matching_melb_vecs, dim=-1)
 
-n = 20
-r1 = batch_steer_with_vec(model, sorted_singular_vecs[:20] * matching_melb_vec_magnitudes[:n, None], formatted_prompt_tokens)
-r2 = batch_steer_with_vec(model, matching_melb_vecs[:20], formatted_prompt_tokens)
+n = 100
+r1 = batch_steer_with_vec(model, sorted_singular_vecs[:n] * matching_melb_vec_magnitudes[:n, None], formatted_prompt_tokens)
+r2 = batch_steer_with_vec(model, matching_melb_vecs[:n], formatted_prompt_tokens)
 zipped = list(zip(r1, r2))
 for i, (a, b) in enumerate(zipped):
     steering_sim = torch.nn.functional.cosine_similarity(sorted_singular_vecs[i], matching_melb_vecs[i], dim=-1)
     layer_16_sim = torch.nn.functional.cosine_similarity(singular_vecs_AF_map_deltas[sorted_singular_idxs[i]], melb_vecs_AF_map_deltas[sorted_melb_idxs[i]], dim=-1)
-    print("Steering sim", steering_sim)
-    print("Layer 16 sim", layer_16_sim)
     print()
+    print()
+    print()
+    print("Steering sim", steering_sim, )
+    print("Layer 16 sim", layer_16_sim)
+    print("jacobian_idx", sorted_singular_idxs[i], "melb_idx", sorted_melb_idxs[i])
     print(f"Steered text for pair {i}")
     print(a)
+    print()
     print(b)
 
 # %%
